@@ -1,0 +1,14 @@
+# Design campaign / trial outputs — large (100s of MB of PDBs) and regenerable
+# from the code + run.sh, so kept out of git.
+IL8_ESM_P6K_*/
+trial_*/
+
+# Stray outputs written to this directory by a single-design run
+*.pdb
+*.log
+/design_results.csv
+/design_sequences.tsv
+
+# Python cache
+__pycache__/
+*.pyc
