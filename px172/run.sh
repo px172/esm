@@ -19,11 +19,18 @@ if ! command -v hmmscan > /dev/null 2>&1; then
 	exit 1
 fi
 
+# NOTE - on this box `conda activate biohub-esm` leaves /usr/bin ahead of the env
+# on PATH, so a bare `python` can resolve to /usr/bin/python (no biotite/torch/esm)
+# even with the env active. hmmscan, however, exists ONLY in the env, so the check
+# above guarantees it came from the env -- and the env's python sits right next to
+# it. Deriving PYTHON from hmmscan's directory is therefore immune to PATH ordering.
+PYTHON="$(dirname "$(command -v hmmscan)")/python"
+
 # NOTE - bumped R002 -> R003. The outputs of this run differ from R002's (PDBs now
 # carry per-residue pLDDT in the B-factor column), and the design_id scheme is
 # unchanged, so reusing R002 would overwrite the existing IL8_ESM_P6K_R002_D128
 # results in place. Set this back to R002 only if you mean to replace them.
-BATCH_NAME="IL8_ESM_P6K_R004"
+BATCH_NAME="IL8_ESM_P6K_R005"
 
 # NUM_RUNS sequential runs x BATCH_SIZE designs optimized together = TOTAL designs.
 # BATCH_SIZE=2 is the throughput sweet spot on this config: measured 1.32 / 1.01 /
@@ -61,7 +68,7 @@ TOTAL=$((NUM_RUNS * BATCH_SIZE))
 # converse still holds: 32 of north's 64 residues are framework positions this
 # prompt holds fixed, so the metric spans more than what is being designed.
 # The chosen value is recorded per row in design_results.csv.
-CUDA_VISIBLE_DEVICES=0 python binder_design.py \
+CUDA_VISIBLE_DEVICES=0 "$PYTHON" binder_design.py \
 	--target-name cxcl8 \
 	--binder-sequence GH2-H3_13.txt \
 	--is-antibody true \
