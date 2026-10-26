@@ -2,10 +2,12 @@
 # requires-python = "<=3.13"
 # dependencies = [
 #     "abnumber",
-#     "esm",
-#     "modal",
+#     "esm@git+https://github.com/Biohub/esm.git@main",
 # ]
 # ///
+# NOTE - "modal" is intentionally omitted from the dependencies above so that
+# local runs (`local=True`) do not require it. Install it separately (or use the
+# Modal CLI) only when you want to run the design remotely on Modal.
 """
 Code for binder design with ESMFold2 and ESMC.
 
@@ -25,7 +27,6 @@ from typing import Any
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import biotite.structure
-import modal
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -56,6 +57,12 @@ from esm.models.esmfold2.layers import _seed_context as seed_context
 from esm.utils.structure.mmcif_parsing import PLDDT_B_FACTOR_SCALE
 from esm.utils.structure.protein_chain import ProteinChain
 from esm.utils.structure.protein_complex import ProteinComplex
+
+# Modal is only needed to run designs remotely; local runs work without it.
+try:
+    import modal
+except ImportError:
+    modal = None
 
 os.environ["HF_XET_HIGH_PERFORMANCE"] = "1"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -1386,41 +1393,43 @@ def get_base_image():
     )
 
 
-app = modal.App(
-    name="esmfold2-design",
-    image=get_base_image(),
-    volumes={
-        "/models": modal.Volume.from_name("esmfold2-models", create_if_missing=True)
-    },
-)
+if modal is not None:
+    app = modal.App(
+        name="esmfold2-design",
+        image=get_base_image(),
+        volumes={
+            "/models": modal.Volume.from_name("esmfold2-models", create_if_missing=True)
+        },
+    )
+
+    # NOTE - Currently the memory usage is quite high, inflating costs.
+    # In an update coming soon, scaling critics will be loaded on demand
+    # to avoid needing this large amount of RAM.
+    @app.cls(gpu="H100", timeout=60 * 60, cpu=16, memory=80 * 1024)
+    class ESMFold2DesignModal(ESMFold2Design):
+        """Modal entrypoint. Hero critics are HF experimental exports with
+        confidence heads. Set ``use_scaling_critics=True`` to also load the
+        15-checkpoint scaling-experiment ensemble (distogram binding confidence only).
+        """
+
+        use_scaling_critics: bool = modal.parameter(default=True)
+        deterministic: bool = modal.parameter(default=False)
+
+        @modal.enter()
+        def load(self):
+            if self.deterministic:
+                torch.use_deterministic_algorithms(True, warn_only=True)
+            return super().load(self.use_scaling_critics)
+
+        @modal.method()
+        def design(self, *args, **kws):
+            return super().design(*args, **kws)
 
 
-# NOTE - Currently the memory usage is quite high, inflating costs.
-# In an update coming soon, scaling critics will be loaded on demand
-# to avoid needing this large amount of RAM.
-@app.cls(gpu="H100", timeout=60 * 60, cpu=16, memory=80 * 1024)
-class ESMFold2DesignModal(ESMFold2Design):
-    """Modal entrypoint. Hero critics are HF experimental exports with
-    confidence heads. Set ``use_scaling_critics=True`` to also load the
-    15-checkpoint scaling-experiment ensemble (distogram binding confidence only).
-    """
-
-    use_scaling_critics: bool = modal.parameter(default=True)
-    deterministic: bool = modal.parameter(default=False)
-
-    @modal.enter()
-    def load(self):
-        if self.deterministic:
-            torch.use_deterministic_algorithms(True, warn_only=True)
-        return super().load(self.use_scaling_critics)
-
-    @modal.method()
-    def design(self, *args, **kws):
-        return super().design(*args, **kws)
+# ---- Entrypoints ----
 
 
-@app.local_entrypoint()
-def main(
+def run_design(
     target_name: str,
     binder_name: str,
     target_sequence: str | None = None,
@@ -1433,6 +1442,11 @@ def main(
     target_hotspot_ids: list[str] | None = None,
     epitope_contact_distance: float = 12.0,
 ):
+    """Run one design, either in this process (``local=True``) or on Modal.
+
+    The local path never touches Modal, so it runs in an environment where
+    ``modal`` is not installed.
+    """
     if local:
         assert not use_scaling_critics, (
             "'abnumber' will fail if running this script with uv run. "
@@ -1442,6 +1456,11 @@ def main(
         app.load(use_scaling_critics)
         run_fn = app.design
     else:
+        if modal is None:
+            raise RuntimeError(
+                "Remote execution needs the 'modal' package, which is not installed. "
+                "Either `pip install modal`, or pass local=True to run in-process."
+            )
         app = ESMFold2DesignModal(
             use_scaling_critics=use_scaling_critics  # ty:ignore[unknown-argument]
         )
@@ -1463,11 +1482,40 @@ def main(
     logger.info(f"\nDesigned sequence: {seq}")
     logger.info(f"Trajectory length: {len(trajectory)} steps")
     logger.info(f"Average final loss: {avg_final_loss:.4f}")
+    return seq, trajectory, results
+
+
+if modal is not None:
+
+    @app.local_entrypoint()
+    def main(
+        target_name: str,
+        binder_name: str,
+        target_sequence: str | None = None,
+        binder_sequence: str | None = None,
+        use_scaling_critics: bool = True,
+        is_antibody: bool | None = None,
+        local: bool = False,
+        seed: int = 0,
+        batch_size: int = 1,
+    ):
+        """Entrypoint for `modal run binder_design.py`."""
+        run_design(
+            target_name=target_name,
+            binder_name=binder_name,
+            target_sequence=target_sequence,
+            binder_sequence=binder_sequence,
+            use_scaling_critics=use_scaling_critics,
+            is_antibody=is_antibody,
+            local=local,
+            seed=seed,
+            batch_size=batch_size,
+        )
 
 
 if __name__ == "__main__":
     # Run a single local design.
-    main(
+    run_design(
         # Example case 1
         target_name="pd-l1",
         binder_name="minibinder",
@@ -1480,5 +1528,7 @@ if __name__ == "__main__":
         seed=0,
         batch_size=1,
         local=True,
-        use_scaling_critics=True,
+        # Scaling critics need conda-installed 'abnumber' deps, so they are
+        # unavailable locally (see the assert in run_design).
+        use_scaling_critics=False,
     )
