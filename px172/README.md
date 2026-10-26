@@ -35,8 +35,8 @@ Measured for this config (cxcl8 + 243-residue scFv = 320 tokens, batch_size 2, t
 
 ### cuequivariance: do NOT install (verified 2026-07-17)
 
-The folding trunk can use NVIDIA cuequivariance kernels when `CUE_AVAILABLE` is true
-(`set_kernel_backend("cuequivariance")`). It is tempting because folding is the 81%
+The folding trunk can use NVIDIA cuequivariance kernels via
+`set_kernel_backend("cuequivariance")`. It is tempting because folding is the 81%
 bottleneck, and it **does install and run on cu130** (`cuequivariance-torch` +
 `cuequivariance-ops-torch-cu13`, both 0.10.0; the triangle kernel runs correctly).
 
@@ -46,3 +46,9 @@ cause graph breaks) and the 320-token complex is too small to amortize kernels d
 for large L. It was installed, benchmarked, and removed. Do not reinstall unless you move
 to a much larger complex (many-hundred-residue target or multi-chain), where its
 large-L kernels may finally win — and re-benchmark against `COMPILE=True` before trusting it.
+
+The code now selects the fused Triton backend instead
+(`BACKEND_FUSED if TRITON_KERNELS_AVAILABLE else None`), matching upstream after it
+dropped the cuequivariance backend in 3.4.2. The previous `CUE_AVAILABLE` check resolved
+to `None` on this box, so no kernel backend was active at all — the measurements above
+predate that fix and are worth re-running.

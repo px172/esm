@@ -61,7 +61,8 @@ from transformers.models.esmc.modeling_esmc import (
 )
 from transformers.models.esmc.tokenization_esmc import ESMCTokenizer
 from transformers.models.esmfold2.modeling_esmfold2_common import (
-    CUE_AVAILABLE,
+    BACKEND_FUSED,
+    TRITON_KERNELS_AVAILABLE,
     PairUpdateBlock,
 )
 from transformers.models.esmfold2.modeling_esmfold2_common import (
@@ -1282,7 +1283,7 @@ def _load_hf_model(
             _ESMC_CACHE[esmc_id] = model._esmc
         model._esmc = _ESMC_CACHE[esmc_id]
     model.configure_lm_dropout(lm_dropout, force_lm_dropout_during_inference=True)
-    model.set_kernel_backend("cuequivariance" if CUE_AVAILABLE else None)
+    model.set_kernel_backend(BACKEND_FUSED if TRITON_KERNELS_AVAILABLE else None)
     return model.to(device=device).eval().requires_grad_(False)
 
 
